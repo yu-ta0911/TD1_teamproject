@@ -22,17 +22,24 @@ const int kInvincibleFrames = 90; // 被弾後の無敵時間
 const int kChargeNeed = 45;       // チャージ弾に必要なフレーム数
 
 // 弾
-const int kMaxBullets = 32;
+const int kMaxBullets = 64;
 const float kScrollSpeed = 4.0f; // 障害物・コイン・ゴールが左へ流れる速度
 
 // ゴール
 const int kGoalWidth = 60;       // ゴールの幅
 const int kClearHpBonus = 100;   // クリア時、残りHP1つにつくボーナス
 
+// ボス
+const float kBossW = 120.0f;
+const float kBossH = 120.0f;
+const float kBossStopX = 900.0f; // ボスが止まって戦うX座標
+
 // 配列サイズ
 const int kMaxObstacles = 32;
 const int kMaxEnemies = 12;
 const int kMaxCoins = 32;
+const int kMaxBigCoins = 8;
+const int kMaxHeals = 8;
 
 // 色
 const unsigned int kColorYellow = 0xFFFF00FF;
@@ -45,6 +52,10 @@ const unsigned int kColorPink = 0xFF66CCFF;
 const unsigned int kColorBlue = 0x3366CCFF;
 const unsigned int kColorDarkGray = 0x333333FF;
 const unsigned int kColorPanel = 0x000000BBu; // 結果画面の半透明の黒
+const unsigned int kColorGold = 0xFFD700FF;
+const unsigned int kColorHeal = 0x44DD66FF;
+const unsigned int kColorDarkRed = 0xAA2222FF;
+const unsigned int kColorHpBar = 0x44DD44FF;
 
 // 画面(シーン)
 enum Scene {
@@ -63,6 +74,7 @@ struct Player {
 	int charge;     // チャージ中のフレーム数
 	int score;
 	int coins;
+	int bigCoins; // 取った大コインの数
 };
 
 struct Bullet {
@@ -83,6 +95,7 @@ struct Enemy {
 	float x, baseY, y;
 	float size;
 	int hp;
+	int maxHp;
 	int shotTimer;
 	int frame;
 	int type; // 0: 揺れて撃つ / 1: 揺れず撃たない
@@ -100,6 +113,20 @@ struct Goal {
 	bool isActive;
 };
 
+// ボス(出現させるにはステージデータに MakeBoss を書く)
+struct Boss {
+	float x, y;
+	float baseY;     // 上下に動くときの中心Y
+	float wave;      // 上下運動の位相
+	int hp, maxHp;
+	int frame;       // 登場からの経過フレーム
+	int aimTimer;    // 狙い撃ちの間隔カウンタ
+	int fanTimer;    // 扇状弾の間隔カウンタ
+	int hitFlash;    // 被弾したときの白点滅フレーム
+	bool isArrived;  // 戦う位置に到着したか
+	bool isActive;
+};
+
 // ============================================================
 // ステージデータ(ここを書き換えて配置をカスタマイズ!)
 // ============================================================
@@ -110,12 +137,18 @@ struct Goal {
 //   障害物・コイン・ゴールは 4px/フレーム、敵は 2px/フレームで左へ流れます。
 //   (右端から自機のX=300付近まで、障害物は約245フレームで届きます)
 // ・ゴール(MakeGoal)を置かないステージはクリアできません。必ず1つ入れてください。
+// ・ボス(MakeBoss)は、倒すまでゴールが出なくなります。ボスより後ろにゴールを書いてください。
+// ・大コイン(MakeBigCoin)は収集要素です。ステージをクリアすると取得数が記録されます。
+// ・回復アイテム(MakeHeal)を取るとHPが1回復します(最大HPまで)。
 
 enum SpawnKind {
 	kSpawnObstacle,
 	kSpawnEnemy,
 	kSpawnCoin,
 	kSpawnGoal,
+	kSpawnBigCoin,
+	kSpawnHeal,
+	kSpawnBoss,
 };
 
 // 障害物の種類
@@ -177,6 +210,33 @@ SpawnData MakeGoal(int frame) {
 	return d;
 }
 
+// 大コイン: MakeBigCoin(出現フレーム, Y座標)  ※ステージごとに3枚置く想定
+SpawnData MakeBigCoin(int frame, float y) {
+	SpawnData d = {};
+	d.frame = frame;
+	d.kind = kSpawnBigCoin;
+	d.y = y;
+	return d;
+}
+
+// 回復アイテム: MakeHeal(出現フレーム, Y座標)
+SpawnData MakeHeal(int frame, float y) {
+	SpawnData d = {};
+	d.frame = frame;
+	d.kind = kSpawnHeal;
+	d.y = y;
+	return d;
+}
+
+// ボス: MakeBoss(出現フレーム, HP)
+SpawnData MakeBoss(int frame, int hp) {
+	SpawnData d = {};
+	d.frame = frame;
+	d.kind = kSpawnBoss;
+	d.hp = hp;
+	return d;
+}
+
 // ---------- STAGE 1:はじめの空 ----------
 const SpawnData kStage1Data[] = {
 	MakeCoin(60, 360.0f, 3),
@@ -185,6 +245,7 @@ const SpawnData kStage1Data[] = {
 	MakeObstacle(210, 470.0f, 40.0f, 250.0f, kObstacleNormal), // 下から
 	MakeCoin(240, 300.0f, 3),
 
+	MakeBigCoin(330, 110.0f), // 大コイン1枚目(画面の上のほう)
 	MakeEnemy(360, 250.0f, kEnemyShooter, 3),
 	MakeCoin(400, 450.0f, 2),
 
@@ -198,9 +259,11 @@ const SpawnData kStage1Data[] = {
 
 	MakeEnemy(780, 150.0f, kEnemyShooter, 3),
 	MakeEnemy(780, 550.0f, kEnemyShooter, 3),
+	MakeHeal(880, 360.0f), // 回復アイテム
 	MakeCoin(900, 200.0f, 3),
 
 	MakeObstacle(960, 300.0f, 40.0f, 120.0f, kObstacleNormal),
+	MakeBigCoin(1000, 620.0f), // 大コイン2枚目(画面の下のほう)
 	MakeEnemy(1020, 360.0f, kEnemyStatic, 5),
 	MakeCoin(1100, 500.0f, 3),
 
@@ -209,6 +272,7 @@ const SpawnData kStage1Data[] = {
 	MakeEnemy(1320, 200.0f, kEnemyShooter, 3),
 	MakeCoin(1400, 350.0f, 3),
 
+	MakeBigCoin(1450, 150.0f), // 大コイン3枚目
 	MakeEnemy(1500, 450.0f, kEnemyStatic, 3),
 	MakeObstacle(1560, 100.0f, 40.0f, 150.0f, kObstacleChargeOnly),
 	MakeCoin(1650, 300.0f, 3),
@@ -224,6 +288,7 @@ const SpawnData kStage2Data[] = {
 
 	MakeObstacle(200, 0.0f, 40.0f, 280.0f, kObstacleNormal),
 	MakeObstacle(200, 400.0f, 40.0f, 320.0f, kObstacleNormal),
+	MakeBigCoin(230, 80.0f), // 大コイン1枚目
 	MakeCoin(260, 340.0f, 4),
 
 	MakeEnemy(360, 360.0f, kEnemyStatic, 5),
@@ -234,11 +299,13 @@ const SpawnData kStage2Data[] = {
 	MakeEnemy(560, 150.0f, kEnemyShooter, 3),
 	MakeEnemy(620, 350.0f, kEnemyShooter, 3),
 	MakeEnemy(680, 550.0f, kEnemyShooter, 3),
+	MakeHeal(700, 450.0f), // 回復アイテム1つ目
 	MakeCoin(740, 250.0f, 3),
 
 	MakeObstacle(800, 0.0f, 40.0f, 350.0f, kObstacleChargeOnly),
 	MakeObstacle(800, 430.0f, 40.0f, 290.0f, kObstacleNormal),
 	MakeEnemy(860, 520.0f, kEnemyStatic, 3),
+	MakeBigCoin(900, 640.0f), // 大コイン2枚目
 	MakeCoin(950, 300.0f, 3),
 
 	MakeEnemy(1040, 200.0f, kEnemyStatic, 3),
@@ -252,19 +319,22 @@ const SpawnData kStage2Data[] = {
 
 	MakeObstacle(1360, 0.0f, 40.0f, 300.0f, kObstacleChargeOnly),
 	MakeObstacle(1360, 420.0f, 40.0f, 300.0f, kObstacleChargeOnly),
+	MakeHeal(1400, 250.0f), // 回復アイテム2つ目
 	MakeCoin(1440, 360.0f, 3),
 	MakeEnemy(1500, 360.0f, kEnemyStatic, 5),
+	MakeBigCoin(1560, 120.0f), // 大コイン3枚目
 	MakeCoin(1620, 200.0f, 3),
 
 	MakeGoal(2000),
 };
 
-// ---------- STAGE 3:壁の連続(障害物が多い) ----------
+// ---------- STAGE 3:壁の連続 + ボス ----------
 const SpawnData kStage3Data[] = {
 	MakeCoin(60, 360.0f, 3),
 
 	MakeObstacle(120, 0.0f, 40.0f, 300.0f, kObstacleChargeOnly),
 	MakeObstacle(120, 400.0f, 40.0f, 320.0f, kObstacleNormal),
+	MakeBigCoin(120, 350.0f), // 大コイン1枚目(壁のすき間の中)
 
 	MakeObstacle(200, 0.0f, 40.0f, 400.0f, kObstacleNormal),
 	MakeObstacle(200, 480.0f, 40.0f, 240.0f, kObstacleChargeOnly),
@@ -276,6 +346,7 @@ const SpawnData kStage3Data[] = {
 
 	MakeObstacle(400, 0.0f, 40.0f, 420.0f, kObstacleNormal),
 	MakeObstacle(400, 500.0f, 40.0f, 220.0f, kObstacleNormal),
+	MakeBigCoin(400, 460.0f), // 大コイン2枚目(壁のすき間の中)
 	MakeCoin(460, 460.0f, 3),
 
 	MakeEnemy(520, 200.0f, kEnemyStatic, 3),
@@ -287,6 +358,7 @@ const SpawnData kStage3Data[] = {
 	MakeObstacle(640, 410.0f, 40.0f, 310.0f, kObstacleChargeOnly),
 	MakeCoin(700, 370.0f, 3),
 
+	MakeHeal(760, 360.0f), // 回復アイテム1つ目
 	MakeObstacle(780, 0.0f, 40.0f, 200.0f, kObstacleNormal),
 	MakeObstacle(780, 280.0f, 40.0f, 440.0f, kObstacleChargeOnly),
 	MakeEnemy(840, 400.0f, kEnemyShooter, 3),
@@ -299,6 +371,7 @@ const SpawnData kStage3Data[] = {
 	MakeEnemy(1040, 600.0f, kEnemyShooter, 3),
 	MakeObstacle(1100, 0.0f, 40.0f, 300.0f, kObstacleNormal),
 	MakeObstacle(1100, 380.0f, 40.0f, 340.0f, kObstacleChargeOnly),
+	MakeBigCoin(1100, 340.0f), // 大コイン3枚目(せまいすき間の中)
 	MakeCoin(1180, 340.0f, 3),
 
 	MakeEnemy(1260, 360.0f, kEnemyStatic, 5),
@@ -306,7 +379,10 @@ const SpawnData kStage3Data[] = {
 	MakeObstacle(1340, 420.0f, 40.0f, 300.0f, kObstacleChargeOnly),
 	MakeCoin(1420, 380.0f, 3),
 
-	MakeGoal(1700),
+	MakeHeal(1480, 360.0f), // ボス前の回復アイテム
+
+	MakeBoss(1600, 40), // ボス登場(HP40)。倒すとゴールが出現します
+	MakeGoal(1700),     // ボスが生きている間は、ここまで来ても出現を待ちます
 };
 
 // ---------- ステージ一覧(ステージ選択画面に並ぶ順) ----------
@@ -334,6 +410,9 @@ Obstacle obstacles[kMaxObstacles];
 Enemy enemies[kMaxEnemies];
 Coin coins[kMaxCoins];
 Goal goal;
+Boss boss;
+Coin bigCoins[kMaxBigCoins]; // 大コイン(収集要素)
+Coin heals[kMaxHeals];       // 回復アイテム
 
 int stageFrame; // ステージ開始からの経過フレーム
 int spawnIndex; // 次に出現させるステージデータの番号
@@ -348,6 +427,7 @@ int clearBonus = 0;
 
 bool stageCleared[kStageCount]; // 一度でもクリアしたか
 int bestScore[kStageCount];     // ステージごとのハイスコア
+int bigCoinRecord[kStageCount]; // ステージごとの大コイン取得記録(クリア時に更新)
 
 // ============================================================
 // ユーティリティ
@@ -372,6 +452,24 @@ bool RectRectHit(float ax, float ay, float aw, float ah, float bx, float by, flo
 
 // キーが「押された瞬間」か
 bool Triggered(const char* keys, const char* preKeys, int key) { return preKeys[key] == 0 && keys[key] != 0; }
+
+// ステージデータの中に、指定した種類の配置がいくつあるか数える
+int CountSpawnKind(int stage, SpawnKind kind) {
+	int n = 0;
+	for (int i = 0; i < kStages[stage].count; i++) {
+		if (kStages[stage].data[i].kind == kind) n++;
+	}
+	return n;
+}
+
+// HPバーを描く
+void DrawHpBar(int x, int y, int w, int h, int hp, int maxHp, unsigned int color) {
+	if (maxHp <= 0) return;
+	if (hp < 0) hp = 0;
+	Novice::DrawBox(x, y, w, h, 0.0f, kColorDarkGray, kFillModeSolid);
+	Novice::DrawBox(x, y, w * hp / maxHp, h, 0.0f, color, kFillModeSolid);
+	Novice::DrawBox(x, y, w, h, 0.0f, WHITE, kFillModeWireFrame);
+}
 
 // プレイヤーにダメージ(無敵中は無効)
 void DamagePlayer(int damage) {
@@ -403,6 +501,7 @@ void ResetGame(int stage) {
 	player.charge = 0;
 	player.score = 0;
 	player.coins = 0;
+	player.bigCoins = 0;
 
 	for (int i = 0; i < kMaxBullets; i++) {
 		playerBullets[i].isActive = false;
@@ -413,6 +512,9 @@ void ResetGame(int stage) {
 	for (int i = 0; i < kMaxCoins; i++) coins[i].isActive = false;
 	goal.x = 0.0f;
 	goal.isActive = false;
+	for (int i = 0; i < kMaxBigCoins; i++) bigCoins[i].isActive = false;
+	for (int i = 0; i < kMaxHeals; i++) heals[i].isActive = false;
+	boss.isActive = false;
 
 	stageFrame = 0;
 	spawnIndex = 0;
@@ -445,6 +547,7 @@ void SpawnEnemy(const SpawnData& d) {
 		enemies[i].y = d.y;
 		enemies[i].size = 40.0f;
 		enemies[i].hp = d.hp;
+		enemies[i].maxHp = d.hp;
 		enemies[i].shotTimer = 60;
 		enemies[i].frame = 0;
 		enemies[i].type = d.type;
@@ -472,6 +575,46 @@ void SpawnGoal() {
 	goal.isActive = true;
 }
 
+// 大コイン
+void SpawnBigCoin(const SpawnData& d) {
+	for (int i = 0; i < kMaxBigCoins; i++) {
+		if (bigCoins[i].isActive) continue;
+		bigCoins[i].x = static_cast<float>(kScreenW);
+		bigCoins[i].y = d.y;
+		bigCoins[i].radius = 24.0f;
+		bigCoins[i].isActive = true;
+		return;
+	}
+}
+
+// 回復アイテム
+void SpawnHeal(const SpawnData& d) {
+	for (int i = 0; i < kMaxHeals; i++) {
+		if (heals[i].isActive) continue;
+		heals[i].x = static_cast<float>(kScreenW);
+		heals[i].y = d.y;
+		heals[i].radius = 14.0f;
+		heals[i].isActive = true;
+		return;
+	}
+}
+
+// ボス
+void SpawnBoss(const SpawnData& d) {
+	boss.x = static_cast<float>(kScreenW);
+	boss.baseY = 300.0f;
+	boss.y = boss.baseY;
+	boss.wave = 0.0f;
+	boss.hp = d.hp;
+	boss.maxHp = d.hp;
+	boss.frame = 0;
+	boss.aimTimer = 60;
+	boss.fanTimer = 100;
+	boss.hitFlash = 0;
+	boss.isArrived = false;
+	boss.isActive = true;
+}
+
 void SpawnFromData(const SpawnData& d) {
 	switch (d.kind) {
 	case kSpawnObstacle:
@@ -485,6 +628,15 @@ void SpawnFromData(const SpawnData& d) {
 		break;
 	case kSpawnGoal:
 		SpawnGoal();
+		break;
+	case kSpawnBigCoin:
+		SpawnBigCoin(d);
+		break;
+	case kSpawnHeal:
+		SpawnHeal(d);
+		break;
+	case kSpawnBoss:
+		SpawnBoss(d);
 		break;
 	}
 }
@@ -535,6 +687,29 @@ void FireEnemyBullet(const Enemy& e) {
 	b.radius = 8.0f;
 	b.isCharged = false;
 	b.isActive = true;
+}
+
+// ボスの攻撃:自機の方向を中心に、count発を扇状に撃つ(count=1なら狙い撃ち)
+void FireBossFan(int count, float spread, float speed, float radius) {
+	float bx = boss.x + kBossW / 2.0f;
+	float by = boss.y + kBossH / 2.0f;
+	float px = player.x + player.size / 2.0f;
+	float py = player.y + player.size / 2.0f;
+	float baseAngle = std::atan2(py - by, px - bx);
+
+	for (int n = 0; n < count; n++) {
+		int idx = FindFreeBullet(enemyBullets);
+		if (idx < 0) return;
+		float angle = baseAngle + (n - (count - 1) / 2.0f) * spread;
+		Bullet& b = enemyBullets[idx];
+		b.x = bx;
+		b.y = by;
+		b.vx = std::cos(angle) * speed;
+		b.vy = std::sin(angle) * speed;
+		b.radius = radius;
+		b.isCharged = false;
+		b.isActive = true;
+	}
 }
 
 // ============================================================
@@ -623,6 +798,8 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 	// ---------- スポーン(ステージデータに従って出現) ----------
 	const StageInfo& stage = kStages[currentStage];
 	while (spawnIndex < stage.count && stage.data[spawnIndex].frame <= stageFrame) {
+		// ボスが生きている間は、ゴールを出さずに待つ
+		if (stage.data[spawnIndex].kind == kSpawnGoal && boss.isActive) break;
 		SpawnFromData(stage.data[spawnIndex]);
 		spawnIndex++;
 	}
@@ -644,6 +821,18 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 		if (coins[i].x + coins[i].radius < 0.0f) {
 			coins[i].isActive = false;
 		}
+	}
+
+	// ---------- 大コイン・回復アイテムの移動 ----------
+	for (int i = 0; i < kMaxBigCoins; i++) {
+		if (!bigCoins[i].isActive) continue;
+		bigCoins[i].x -= kScrollSpeed;
+		if (bigCoins[i].x + bigCoins[i].radius < 0.0f) bigCoins[i].isActive = false;
+	}
+	for (int i = 0; i < kMaxHeals; i++) {
+		if (!heals[i].isActive) continue;
+		heals[i].x -= kScrollSpeed;
+		if (heals[i].x + heals[i].radius < 0.0f) heals[i].isActive = false;
 	}
 
 	// ---------- ゴールの移動 ----------
@@ -676,6 +865,43 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 
 		if (e.x + e.size < 0.0f) {
 			e.isActive = false;
+		}
+	}
+
+	// ---------- ボスの移動・攻撃 ----------
+	if (boss.isActive) {
+		boss.frame++;
+		if (boss.hitFlash > 0) boss.hitFlash--;
+
+		if (!boss.isArrived) {
+			// 右から登場する
+			boss.x -= 3.0f;
+			if (boss.x <= kBossStopX) {
+				boss.x = kBossStopX;
+				boss.isArrived = true;
+			}
+		}
+		else {
+			// HPが半分以下になると、動きも攻撃も激しくなる
+			bool isEnraged = boss.hp * 2 <= boss.maxHp;
+
+			// 上下にゆっくり動く
+			boss.wave += isEnraged ? 0.045f : 0.03f;
+			boss.y = boss.baseY + std::sin(boss.wave) * 200.0f;
+
+			// 自機を狙う単発弾
+			boss.aimTimer--;
+			if (boss.aimTimer <= 0) {
+				FireBossFan(1, 0.0f, 6.0f, 9.0f);
+				boss.aimTimer = isEnraged ? 40 : 65;
+			}
+
+			// 扇状の弾(通常3発、激しいときは5発)
+			boss.fanTimer--;
+			if (boss.fanTimer <= 0) {
+				FireBossFan(isEnraged ? 5 : 3, 0.3f, 4.5f, 8.0f);
+				boss.fanTimer = isEnraged ? 100 : 150;
+			}
 		}
 	}
 
@@ -746,6 +972,33 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 		}
 	}
 
+	// ---------- 当たり判定:プレイヤーの弾 × ボス ----------
+	if (boss.isActive) {
+		for (int i = 0; i < kMaxBullets; i++) {
+			Bullet& b = playerBullets[i];
+			if (!b.isActive) continue;
+			if (!CircleRectHit(b.x, b.y, b.radius, boss.x, boss.y, kBossW, kBossH)) continue;
+
+			boss.hp -= b.isCharged ? 3 : 1; // チャージ弾は3ダメージ
+			boss.hitFlash = 6;
+			b.isActive = false;
+
+			if (boss.hp <= 0) {
+				boss.hp = 0;
+				boss.isActive = false;
+				player.score += 1000;
+				// ボスを倒したら、画面上の敵の弾を消す
+				for (int j = 0; j < kMaxBullets; j++) enemyBullets[j].isActive = false;
+				break;
+			}
+		}
+	}
+
+	// ---------- 当たり判定:プレイヤー × ボス(体当たり) ----------
+	if (boss.isActive && RectRectHit(player.x, player.y, player.size, player.size, boss.x, boss.y, kBossW, kBossH)) {
+		DamagePlayer(1);
+	}
+
 	// ---------- 当たり判定:プレイヤー × 障害物 ----------
 	for (int i = 0; i < kMaxObstacles; i++) {
 		Obstacle& o = obstacles[i];
@@ -779,6 +1032,29 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 		}
 	}
 
+	// ---------- 当たり判定:プレイヤー × 大コイン ----------
+	for (int i = 0; i < kMaxBigCoins; i++) {
+		Coin& c = bigCoins[i];
+		if (!c.isActive) continue;
+		if (CircleRectHit(c.x, c.y, c.radius, player.x, player.y, player.size, player.size)) {
+			c.isActive = false;
+			player.bigCoins++;
+			player.score += 300;
+		}
+	}
+
+	// ---------- 当たり判定:プレイヤー × 回復アイテム ----------
+	for (int i = 0; i < kMaxHeals; i++) {
+		Coin& c = heals[i];
+		if (!c.isActive) continue;
+		if (CircleRectHit(c.x, c.y, c.radius, player.x, player.y, player.size, player.size)) {
+			c.isActive = false;
+			if (player.hp < kPlayerMaxHp) {
+				player.hp++; // HPが1回復(最大HPまで)
+			}
+		}
+	}
+
 	// ---------- ゲームオーバー判定 ----------
 	// 画面外(下)に落下したら即死
 	if (player.y > kScreenH) {
@@ -796,6 +1072,9 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 		clearBonus = player.hp * kClearHpBonus; // 残りHPが多いほどボーナス
 		player.score += clearBonus;
 		stageCleared[currentStage] = true;
+		if (player.bigCoins > bigCoinRecord[currentStage]) {
+			bigCoinRecord[currentStage] = player.bigCoins;
+		}
 		if (player.score > bestScore[currentStage]) {
 			bestScore[currentStage] = player.score;
 		}
@@ -861,6 +1140,11 @@ void DrawStageSelect() {
 			Novice::ScreenPrintf(x + 20, kBoxY + 140, "NOT CLEARED");
 		}
 
+		if (CountSpawnKind(i, kSpawnBoss) > 0) {
+			Novice::ScreenPrintf(x + 20, kBoxY + 85, "BOSS STAGE!");
+		}
+		Novice::ScreenPrintf(x + 20, kBoxY + 190, "BIG COIN: %d / %d", bigCoinRecord[i], CountSpawnKind(i, kSpawnBigCoin));
+
 		// カーソル
 		if (isSelected) {
 			Novice::ScreenPrintf(cx - 4, kBoxY - 30, "V");
@@ -906,12 +1190,50 @@ void DrawPlay() {
 		Novice::DrawEllipse(static_cast<int>(c.x), static_cast<int>(c.y), static_cast<int>(c.radius), static_cast<int>(c.radius), 0.0f, kColorYellow, kFillModeSolid);
 	}
 
+	// ---------- 大コイン ----------
+	for (int i = 0; i < kMaxBigCoins; i++) {
+		const Coin& c = bigCoins[i];
+		if (!c.isActive) continue;
+		int cx = static_cast<int>(c.x);
+		int cy = static_cast<int>(c.y);
+		Novice::DrawEllipse(cx, cy, static_cast<int>(c.radius), static_cast<int>(c.radius), 0.0f, kColorOrange, kFillModeSolid);
+		Novice::DrawEllipse(cx, cy, static_cast<int>(c.radius - 6.0f), static_cast<int>(c.radius - 6.0f), 0.0f, kColorGold, kFillModeSolid);
+		Novice::DrawEllipse(cx - 6, cy - 6, static_cast<int>(4.0f), static_cast<int>(4.0f), 0.0f, WHITE, kFillModeSolid); // つや
+	}
+
+	// ---------- 回復アイテム(緑の丸に白い十字) ----------
+	for (int i = 0; i < kMaxHeals; i++) {
+		const Coin& c = heals[i];
+		if (!c.isActive) continue;
+		int cx = static_cast<int>(c.x);
+		int cy = static_cast<int>(c.y);
+		Novice::DrawEllipse(cx, cy, static_cast<int>(c.radius), static_cast<int>(c.radius), 0.0f, kColorHeal, kFillModeSolid);
+		Novice::DrawBox(cx - 8, cy - 2, 16, 4, 0.0f, WHITE, kFillModeSolid);
+		Novice::DrawBox(cx - 2, cy - 8, 4, 16, 0.0f, WHITE, kFillModeSolid);
+	}
+
 	// ---------- 敵 ----------
 	for (int i = 0; i < kMaxEnemies; i++) {
 		const Enemy& e = enemies[i];
 		if (!e.isActive) continue;
 		unsigned int color = (e.type == kEnemyShooter) ? RED : kColorPink;
 		Novice::DrawBox(static_cast<int>(e.x), static_cast<int>(e.y), static_cast<int>(e.size), static_cast<int>(e.size), 0.0f, color, kFillModeSolid);
+		// 雑魚敵のHPバー
+		DrawHpBar(static_cast<int>(e.x), static_cast<int>(e.y) - 10, static_cast<int>(e.size), 5, e.hp, e.maxHp, kColorHpBar);
+	}
+
+	// ---------- ボス ----------
+	if (boss.isActive) {
+		int bx = static_cast<int>(boss.x);
+		int by = static_cast<int>(boss.y);
+		int bw = static_cast<int>(kBossW);
+		int bh = static_cast<int>(kBossH);
+		unsigned int color = (boss.hitFlash > 0) ? WHITE : kColorDarkRed; // 被弾すると白く光る
+		Novice::DrawBox(bx, by, bw, bh, 0.0f, color, kFillModeSolid);
+		Novice::DrawBox(bx, by, bw, bh, 0.0f, WHITE, kFillModeWireFrame);
+		// 目(自機のほうを向いている)
+		Novice::DrawBox(bx + 20, by + 30, 24, 24, 0.0f, kColorYellow, kFillModeSolid);
+		Novice::DrawBox(bx + 20, by + 70, 24, 24, 0.0f, kColorYellow, kFillModeSolid);
 	}
 
 	// ---------- 敵の弾 ----------
@@ -956,10 +1278,18 @@ void DrawPlay() {
 	}
 	Novice::ScreenPrintf(20, 55, "SCORE: %d", player.score);
 	Novice::ScreenPrintf(20, 75, "COIN : %d", player.coins);
+	Novice::ScreenPrintf(150, 75, "BIG COIN: %d / %d", player.bigCoins, CountSpawnKind(currentStage, kSpawnBigCoin));
 	Novice::ScreenPrintf(20, 100, "SPACE: Float / Release = Shot / Hold = Charge Shot");
 	Novice::ScreenPrintf(20, 120, "Brown = Normal Shot OK / Purple = Charge Shot Only");
 	Novice::ScreenPrintf(20, 140, "Red = Shooter / Pink = Static (no shot)");
+	Novice::ScreenPrintf(20, 160, "Gold(big) = Bonus Coin / Green + = Heal");
 	Novice::ScreenPrintf(1000, 20, "STAGE %d : %s", currentStage + 1, kStages[currentStage].name);
+
+	// ボスのHPバー(画面上部)
+	if (boss.isActive) {
+		Novice::ScreenPrintf(340, 12, "BOSS   HP: %d / %d", boss.hp, boss.maxHp);
+		DrawHpBar(340, 32, 600, 18, boss.hp, boss.maxHp, RED);
+	}
 
 	// ---------- ゲームオーバー表示 ----------
 	if (isGameOver) {
@@ -978,6 +1308,7 @@ void DrawPlay() {
 		Novice::ScreenPrintf(570, 275, "STAGE CLEAR!");
 		Novice::ScreenPrintf(520, 320, "COIN: %d    HP BONUS: +%d", player.coins, clearBonus);
 		Novice::ScreenPrintf(520, 345, "SCORE: %d    BEST: %d", player.score, bestScore[currentStage]);
+		Novice::ScreenPrintf(520, 370, "BIG COIN: %d / %d", player.bigCoins, CountSpawnKind(currentStage, kSpawnBigCoin));
 		Novice::ScreenPrintf(540, 420, "R     : Retry");
 		Novice::ScreenPrintf(540, 445, "ENTER : Stage Select");
 	}
@@ -999,6 +1330,7 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 	for (int i = 0; i < kStageCount; i++) {
 		stageCleared[i] = false;
 		bestScore[i] = 0;
+		bigCoinRecord[i] = 0;
 	}
 	ResetGame(0);
 
