@@ -1,6 +1,8 @@
 #include <Novice.h>
+#include "FontRenderer.h"
 #include <cmath>
 #include <cstring>
+
 
 const char kWindowTitle[] = "LC1C_20_ナカムラユウタ_タイトル";
 
@@ -19,7 +21,7 @@ const float kMaxRiseSpeed = -8.0f; // 最大上昇速度
 // プレイヤー
 const int kPlayerMaxHp = 5;
 const int kInvincibleFrames = 90; // 被弾後の無敵時間
-const int kChargeNeed = 45;       // チャージ弾に必要なフレーム数
+const int kChargeNeed = 30;       // チャージ弾に必要なフレーム数
 
 // 弾
 const int kMaxBullets = 64;
@@ -1097,24 +1099,24 @@ void DrawTitle() {
 	// タイトル
 	Novice::DrawBox(440, 180, 400, 100, 0.0f, kColorBlue, kFillModeSolid);
 	Novice::DrawBox(440, 180, 400, 100, 0.0f, WHITE, kFillModeWireFrame);
-	Novice::ScreenPrintf(580, 225, "SKY FLOAT SHOOTER");
+	GetFont().Printf(580, 225, "SKY FLOAT SHOOTER");
 
 	// 点滅する案内
 	if ((titleFrame / 30) % 2 == 0) {
-		Novice::ScreenPrintf(570, 330, "PRESS ENTER TO START");
+		GetFont().Printf(570, 330, "PRESS ENTER TO START");
 	}
 
 	// 操作説明
-	Novice::ScreenPrintf(470, 560, "SPACE : Float up / Release = Shot / Hold = Charge Shot");
-	Novice::ScreenPrintf(470, 585, "Get Coins, Reach the GOAL!  Falling off screen = Dead");
-	Novice::ScreenPrintf(470, 610, "ESC : Quit");
+	GetFont().Printf(470, 560, "SPACE : Float up / Release = Shot / Hold = Charge Shot");
+	GetFont().Printf(470, 585, "Get Coins, Reach the GOAL!  Falling off screen = Dead");
+	GetFont().Printf(470, 610, "ESC : Quit");
 }
 
 // ============================================================
 // 描画処理:ステージ選択
 // ============================================================
 void DrawStageSelect() {
-	Novice::ScreenPrintf(565, 110, "- STAGE SELECT -");
+	GetFont().Printf(565, 110, "- STAGE SELECT -");
 
 	const int kBoxW = 300;
 	const int kBoxH = 220;
@@ -1129,29 +1131,29 @@ void DrawStageSelect() {
 		Novice::DrawBox(x, kBoxY, kBoxW, kBoxH, 0.0f, isSelected ? kColorBlue : kColorDarkGray, kFillModeSolid);
 		Novice::DrawBox(x, kBoxY, kBoxW, kBoxH, 0.0f, isSelected ? WHITE : kColorGray, kFillModeWireFrame);
 
-		Novice::ScreenPrintf(x + 20, kBoxY + 25, "STAGE %d", i + 1);
-		Novice::ScreenPrintf(x + 20, kBoxY + 55, "%s", kStages[i].name);
+		GetFont().Printf(x + 20, kBoxY + 25, "STAGE %d", i + 1);
+		GetFont().Printf(x + 20, kBoxY + 55, "%s", kStages[i].name);
 
 		if (stageCleared[i]) {
-			Novice::ScreenPrintf(x + 20, kBoxY + 140, "CLEARED!");
-			Novice::ScreenPrintf(x + 20, kBoxY + 165, "BEST SCORE: %d", bestScore[i]);
+			GetFont().Printf(x + 20, kBoxY + 140, "CLEARED!");
+			GetFont().Printf(x + 20, kBoxY + 165, "BEST SCORE: %d", bestScore[i]);
 		}
 		else {
-			Novice::ScreenPrintf(x + 20, kBoxY + 140, "NOT CLEARED");
+			GetFont().Printf(x + 20, kBoxY + 140, "NOT CLEARED");
 		}
 
 		if (CountSpawnKind(i, kSpawnBoss) > 0) {
-			Novice::ScreenPrintf(x + 20, kBoxY + 85, "BOSS STAGE!");
+			GetFont().Printf(x + 20, kBoxY + 85, "BOSS STAGE!");
 		}
-		Novice::ScreenPrintf(x + 20, kBoxY + 190, "BIG COIN: %d / %d", bigCoinRecord[i], CountSpawnKind(i, kSpawnBigCoin));
+		GetFont().Printf(x + 20, kBoxY + 190, "BIG COIN: %d / %d", bigCoinRecord[i], CountSpawnKind(i, kSpawnBigCoin));
 
 		// カーソル
 		if (isSelected) {
-			Novice::ScreenPrintf(cx - 4, kBoxY - 30, "V");
+			GetFont().Printf(cx - 4, kBoxY - 30, "V");
 		}
 	}
 
-	Novice::ScreenPrintf(430, 560, "LEFT / RIGHT : Select    ENTER : Start    BACKSPACE : Title");
+	GetFont().Printf(430, 560, "LEFT / RIGHT : Select    ENTER : Start    BACKSPACE : Title");
 }
 
 // ============================================================
@@ -1180,7 +1182,7 @@ void DrawPlay() {
 				Novice::DrawBox(static_cast<int>(goal.x) + col * cell, row * cell, cell, cell, 0.0f, color, kFillModeSolid);
 			}
 		}
-		Novice::ScreenPrintf(static_cast<int>(goal.x) + 10, 340, "GOAL");
+		GetFont().Printf(static_cast<int>(goal.x) + 10, 340, "GOAL");
 	}
 
 	// ---------- コイン ----------
@@ -1276,18 +1278,18 @@ void DrawPlay() {
 	for (int i = 0; i < kPlayerMaxHp; i++) {
 		Novice::DrawBox(20 + i * 30, 20, 24, 24, 0.0f, i < player.hp ? RED : kColorGray, i < player.hp ? kFillModeSolid : kFillModeWireFrame);
 	}
-	Novice::ScreenPrintf(20, 55, "SCORE: %d", player.score);
-	Novice::ScreenPrintf(20, 75, "COIN : %d", player.coins);
-	Novice::ScreenPrintf(150, 75, "BIG COIN: %d / %d", player.bigCoins, CountSpawnKind(currentStage, kSpawnBigCoin));
-	Novice::ScreenPrintf(20, 100, "SPACE: Float / Release = Shot / Hold = Charge Shot");
-	Novice::ScreenPrintf(20, 120, "Brown = Normal Shot OK / Purple = Charge Shot Only");
-	Novice::ScreenPrintf(20, 140, "Red = Shooter / Pink = Static (no shot)");
-	Novice::ScreenPrintf(20, 160, "Gold(big) = Bonus Coin / Green + = Heal");
-	Novice::ScreenPrintf(1000, 20, "STAGE %d : %s", currentStage + 1, kStages[currentStage].name);
+	GetFont().Printf(20, 55, "SCORE: %d", player.score);
+	GetFont().Printf(20, 75, "COIN : %d", player.coins);
+	GetFont().Printf(150, 75, "BIG COIN: %d / %d", player.bigCoins, CountSpawnKind(currentStage, kSpawnBigCoin));
+	GetFont().Printf(20, 100, "SPACE: Float / Release = Shot / Hold = Charge Shot");
+	GetFont().Printf(20, 120, "Brown = Normal Shot OK / Purple = Charge Shot Only");
+	GetFont().Printf(20, 140, "Red = Shooter / Pink = Static (no shot)");
+	GetFont().Printf(20, 160, "Gold(big) = Bonus Coin / Green + = Heal");
+	GetFont().Printf(1000, 20, "STAGE %d : %s", currentStage + 1, kStages[currentStage].name);
 
 	// ボスのHPバー(画面上部)
 	if (boss.isActive) {
-		Novice::ScreenPrintf(340, 12, "BOSS   HP: %d / %d", boss.hp, boss.maxHp);
+		GetFont().Printf(340, 12, "BOSS   HP: %d / %d", boss.hp, boss.maxHp);
 		DrawHpBar(340, 32, 600, 18, boss.hp, boss.maxHp, RED);
 	}
 
@@ -1295,22 +1297,22 @@ void DrawPlay() {
 	if (isGameOver) {
 		Novice::DrawBox(400, 240, 480, 230, 0.0f, kColorPanel, kFillModeSolid);
 		Novice::DrawBox(400, 240, 480, 230, 0.0f, WHITE, kFillModeWireFrame);
-		Novice::ScreenPrintf(580, 275, "GAME OVER");
-		Novice::ScreenPrintf(520, 320, "SCORE: %d    COIN: %d", player.score, player.coins);
-		Novice::ScreenPrintf(540, 390, "R     : Retry");
-		Novice::ScreenPrintf(540, 415, "ENTER : Stage Select");
+		GetFont().Printf(580, 275, "GAME OVER");
+		GetFont().Printf(520, 320, "SCORE: %d    COIN: %d", player.score, player.coins);
+		GetFont().Printf(540, 390, "R     : Retry");
+		GetFont().Printf(540, 415, "ENTER : Stage Select");
 	}
 
 	// ---------- ステージクリア表示 ----------
 	if (isStageClear) {
 		Novice::DrawBox(400, 240, 480, 260, 0.0f, kColorPanel, kFillModeSolid);
 		Novice::DrawBox(400, 240, 480, 260, 0.0f, kColorYellow, kFillModeWireFrame);
-		Novice::ScreenPrintf(570, 275, "STAGE CLEAR!");
-		Novice::ScreenPrintf(520, 320, "COIN: %d    HP BONUS: +%d", player.coins, clearBonus);
-		Novice::ScreenPrintf(520, 345, "SCORE: %d    BEST: %d", player.score, bestScore[currentStage]);
-		Novice::ScreenPrintf(520, 370, "BIG COIN: %d / %d", player.bigCoins, CountSpawnKind(currentStage, kSpawnBigCoin));
-		Novice::ScreenPrintf(540, 420, "R     : Retry");
-		Novice::ScreenPrintf(540, 445, "ENTER : Stage Select");
+		GetFont().Printf(570, 275, "STAGE CLEAR!");
+		GetFont().Printf(520, 320, "COIN: %d    HP BONUS: +%d", player.coins, clearBonus);
+		GetFont().Printf(520, 345, "SCORE: %d    BEST: %d", player.score, bestScore[currentStage]);
+		GetFont().Printf(520, 370, "BIG COIN: %d / %d", player.bigCoins, CountSpawnKind(currentStage, kSpawnBigCoin));
+		GetFont().Printf(540, 420, "R     : Retry");
+		GetFont().Printf(540, 445, "ENTER : Stage Select");
 	}
 }
 
@@ -1321,6 +1323,8 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	// ライブラリの初期化
 	Novice::Initialize(kWindowTitle, kScreenW, kScreenH);
+
+	GetFont().Create(L"PixelMplus12-Bold.ttf", L"PixelMplus12", 16);
 
 	// キー入力結果を受け取る箱
 	char keys[256] = { 0 };
