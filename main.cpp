@@ -2,6 +2,8 @@
 #include "FontRenderer.h"
 #include <cmath>
 #include <cstring>
+#include <fstream>
+#include <string>
 
 
 const char kWindowTitle[] = "LC1C_20_ナカムラユウタ_タイトル";
@@ -29,6 +31,7 @@ const float kScrollSpeed = 4.0f; // 障害物・コイン・ゴールが左へ�
 
 // ゴール
 const int kGoalWidth = 60;       // ゴールの幅
+const int kGoalTileH = 30;       // ゴール画像1枚ぶんの高さ(縦にこの高さで並べる)
 const int kClearHpBonus = 100;   // クリア時、残りHP1つにつくボーナス
 
 // ボス
@@ -36,14 +39,22 @@ const float kBossW = 120.0f;
 const float kBossH = 120.0f;
 const float kBossStopX = 900.0f; // ボスが止まって戦うX座標
 
+// 背景
+const float kBgScrollSpeed = 1.0f; // 背景のスクロール速度(前景より遅いと奥行きが出る)
+
 // 配列サイズ
 const int kMaxObstacles = 32;
 const int kMaxEnemies = 12;
 const int kMaxCoins = 32;
 const int kMaxBigCoins = 8;
 const int kMaxHeals = 8;
+const int kMaxTilesPerObstacle = 24; // 1つの障害物を構成するタイルの最大数(高さ ÷ 幅)
+const int kTileScore = 5;            // ブロックのタイルを1つ壊したときの得点
 
-// 色
+// 画像フォルダ(プロジェクトの実行フォルダからの位置)
+const char kImageDir[] = "./images/";
+
+// 色(画像が読み込めなかったときの代わりの色、画面表示用)
 const unsigned int kColorYellow = 0xFFFF00FF;
 const unsigned int kColorOrange = 0xFFA500FF;
 const unsigned int kColorCyan = 0x00FFFFFF;
@@ -58,6 +69,18 @@ const unsigned int kColorGold = 0xFFD700FF;
 const unsigned int kColorHeal = 0x44DD66FF;
 const unsigned int kColorDarkRed = 0xAA2222FF;
 const unsigned int kColorHpBar = 0x44DD44FF;
+
+// デバッグ表示(当たり判定)の色。下2桁(66)が透明度
+const unsigned int kDebugPlayer = 0x00FF0066;
+const unsigned int kDebugEnemy = 0xFF000066;
+const unsigned int kDebugBoss = 0xFF000066;
+const unsigned int kDebugBlockNormal = 0xFFAA0066; // 通常弾で壊せるブロック
+const unsigned int kDebugBlockCharge = 0xAA00FF66; // チャージ弾でのみ壊せるブロック
+const unsigned int kDebugBlockSolid = 0xFFFFFF66;  // 壊せないブロック
+const unsigned int kDebugItem = 0xFFFF0066;        // コイン・大コイン・回復
+const unsigned int kDebugPlayerBullet = 0x00FFFF66;
+const unsigned int kDebugEnemyBullet = 0xFF880066;
+const unsigned int kDebugGoal = 0x00FF0044;
 
 // 画面(シーン)
 enum Scene {
@@ -89,8 +112,11 @@ struct Bullet {
 
 struct Obstacle {
 	float x, y, w, h;
-	int type; // 0: 通常弾で壊せる / 1: チャージ弾でのみ壊せる
+	int type; // 0: 通常弾で壊せる / 1: チャージ弾でのみ壊せる / 2: 壊せない
 	bool isActive;
+	int tileCount;                         // 縦に並ぶタイルの数
+	int aliveTiles;                        // 壊れていないタイルの数(0になったら障害物ごと消える)
+	bool tileAlive[kMaxTilesPerObstacle];  // タイルごとの「まだ残っているか」
 };
 
 struct Enemy {
@@ -124,9 +150,17 @@ struct Boss {
 	int frame;       // 登場からの経過フレーム
 	int aimTimer;    // 狙い撃ちの間隔カウンタ
 	int fanTimer;    // 扇状弾の間隔カウンタ
-	int hitFlash;    // 被弾したときの白点滅フレーム
+	int hitFlash;    // 被弾したときの画像切り替えフレーム
 	bool isArrived;  // 戦う位置に到着したか
 	bool isActive;
+};
+
+// 画像1枚ぶんの情報
+struct Sprite {
+	int handle = -1; // Novice::LoadTexture が返す番号
+	int w = 0;       // 画像の幅(px)
+	int h = 0;       // 画像の高さ(px)
+	bool IsValid() const { return handle >= 0 && w > 0 && h > 0; }
 };
 
 // ============================================================
@@ -142,6 +176,7 @@ struct Boss {
 // ・ボス(MakeBoss)は、倒すまでゴールが出なくなります。ボスより後ろにゴールを書いてください。
 // ・大コイン(MakeBigCoin)は収集要素です。ステージをクリアすると取得数が記録されます。
 // ・回復アイテム(MakeHeal)を取るとHPが1回復します(最大HPまで)。
+// ・壊せないブロック(kObstacleSolid)は、どんな弾も防ぎます。すき間を通って避けてください。
 
 enum SpawnKind {
 	kSpawnObstacle,
@@ -154,12 +189,13 @@ enum SpawnKind {
 };
 
 // 障害物の種類
-const int kObstacleNormal = 0;     // 通常弾で壊せる
-const int kObstacleChargeOnly = 1; // チャージ弾でしか壊せない
+const int kObstacleNormal = 0;     // 通常弾で壊せる        (画像: blockB)
+const int kObstacleChargeOnly = 1; // チャージ弾でしか壊せない (画像: blockC)
+const int kObstacleSolid = 2;      // 壊せない              (画像: blockA)
 
 // 敵の種類
-const int kEnemyShooter = 0; // 上下に揺れながら、自機を狙って弾を撃つ
-const int kEnemyStatic = 1;  // 揺れない・弾も撃たない
+const int kEnemyShooter = 0; // 上下に揺れながら、自機を狙って弾を撃つ (画像: enemyA)
+const int kEnemyStatic = 1;  // 揺れない・弾も撃たない               (画像: enemyB)
 
 struct SpawnData {
 	int frame;
@@ -261,6 +297,7 @@ const SpawnData kStage1Data[] = {
 
 	MakeEnemy(780, 150.0f, kEnemyShooter, 3),
 	MakeEnemy(780, 550.0f, kEnemyShooter, 3),
+	MakeObstacle(840, 280.0f, 40.0f, 120.0f, kObstacleSolid), // 壊せないブロック
 	MakeHeal(880, 360.0f), // 回復アイテム
 	MakeCoin(900, 200.0f, 3),
 
@@ -310,6 +347,7 @@ const SpawnData kStage2Data[] = {
 	MakeBigCoin(900, 640.0f), // 大コイン2枚目
 	MakeCoin(950, 300.0f, 3),
 
+	MakeObstacle(1000, 300.0f, 40.0f, 120.0f, kObstacleSolid), // 壊せないブロック
 	MakeEnemy(1040, 200.0f, kEnemyStatic, 3),
 	MakeEnemy(1040, 500.0f, kEnemyShooter, 3),
 	MakeObstacle(1100, 250.0f, 40.0f, 220.0f, kObstacleNormal),
@@ -318,6 +356,7 @@ const SpawnData kStage2Data[] = {
 	MakeEnemy(1260, 120.0f, kEnemyShooter, 3),
 	MakeEnemy(1260, 360.0f, kEnemyShooter, 3),
 	MakeEnemy(1260, 600.0f, kEnemyShooter, 3),
+	MakeObstacle(1300, 320.0f, 40.0f, 100.0f, kObstacleSolid), // 壊せないブロック
 
 	MakeObstacle(1360, 0.0f, 40.0f, 300.0f, kObstacleChargeOnly),
 	MakeObstacle(1360, 420.0f, 40.0f, 300.0f, kObstacleChargeOnly),
@@ -376,6 +415,10 @@ const SpawnData kStage3Data[] = {
 	MakeBigCoin(1100, 340.0f), // 大コイン3枚目(せまいすき間の中)
 	MakeCoin(1180, 340.0f, 3),
 
+	// 壊せないブロックの壁(すき間を通り抜ける)
+	MakeObstacle(1220, 0.0f, 40.0f, 280.0f, kObstacleSolid),
+	MakeObstacle(1220, 440.0f, 40.0f, 280.0f, kObstacleSolid),
+
 	MakeEnemy(1260, 360.0f, kEnemyStatic, 5),
 	MakeObstacle(1340, 0.0f, 40.0f, 340.0f, kObstacleChargeOnly),
 	MakeObstacle(1340, 420.0f, 40.0f, 300.0f, kObstacleChargeOnly),
@@ -431,6 +474,130 @@ bool stageCleared[kStageCount]; // 一度でもクリアしたか
 int bestScore[kStageCount];     // ステージごとのハイスコア
 int bigCoinRecord[kStageCount]; // ステージごとの大コイン取得記録(クリア時に更新)
 
+// デバッグ表示:true の間、当たり判定を半透明の図形で表示する(F1キーで切り替え)
+// ※完成版では false にしておくこと
+bool debug = true;
+
+float bgOffset = 0.0f; // 背景のスクロール量(px)
+
+// ============================================================
+// 画像(スプライト)
+// ============================================================
+Sprite sprBg;          // 背景
+Sprite sprPlayer;      // 自機
+Sprite sprEnemyA;      // 敵(揺れて撃つ)
+Sprite sprEnemyB;      // 敵(揺れず撃たない)
+Sprite sprBoss1;       // ボス(通常)
+Sprite sprBoss2;       // ボス(ダメージを受けたとき)
+Sprite sprNormalShot;  // 自機の通常弾
+Sprite sprChargeShot;  // 自機のチャージ弾
+Sprite sprEnemyShot;   // 敵・ボスの弾
+Sprite sprBlockA;      // 壊せないブロック
+Sprite sprBlockB;      // 通常弾で壊せるブロック
+Sprite sprBlockC;      // チャージ弾でのみ壊せるブロック
+Sprite sprGoalTile;    // ゴール
+Sprite sprCoin;        // コイン
+Sprite sprBigCoin;     // 大コイン
+Sprite sprHeal;        // 回復アイテム
+Sprite sprHeart1;      // HP(あり)
+Sprite sprHeart2;      // HP(なし)
+
+// PNGファイルの先頭(IHDR)から、画像の幅と高さを読み取る
+bool ReadPngSize(const char* path, int* outW, int* outH) {
+	std::ifstream ifs(path, std::ios::binary);
+	if (!ifs) return false;
+
+	unsigned char header[24] = {};
+	ifs.read(reinterpret_cast<char*>(header), sizeof(header));
+	if (ifs.gcount() < 24) return false;
+
+	// PNGの目印(先頭4バイト)を確認
+	if (header[0] != 0x89 || header[1] != 'P' || header[2] != 'N' || header[3] != 'G') return false;
+
+	// 幅と高さは 16〜23 バイト目に、上位バイトから順に入っている
+	*outW = (header[16] << 24) | (header[17] << 16) | (header[18] << 8) | header[19];
+	*outH = (header[20] << 24) | (header[21] << 16) | (header[22] << 8) | header[23];
+	return true;
+}
+
+// images フォルダから画像を読み込む(見つからなければ「無効な画像」を返す)
+Sprite LoadSprite(const char* fileName) {
+	Sprite s;
+	std::string path = std::string(kImageDir) + fileName;
+	if (!ReadPngSize(path.c_str(), &s.w, &s.h)) {
+		return s; // 読み込めない → 描画時は代わりの四角形になる
+	}
+	s.handle = Novice::LoadTexture(path.c_str());
+	return s;
+}
+
+// すべての画像を読み込む(Novice::Initialize の後に1回だけ呼ぶ)
+void LoadSprites() {
+	sprBg = LoadSprite("td1-1_bg_1.png");
+	sprPlayer = LoadSprite("td1-1_player1.png");
+	sprEnemyA = LoadSprite("td1-1_enemyA.png");
+	sprEnemyB = LoadSprite("td1-1_enemyB.png");
+	sprBoss1 = LoadSprite("td1-1_boss1.png");
+	sprBoss2 = LoadSprite("td1-1_boss2.png");
+	sprNormalShot = LoadSprite("td1-1_normal_shot.png");
+	sprChargeShot = LoadSprite("td1-1_charge_shot.png");
+	sprEnemyShot = LoadSprite("td1-1_enemy_shot.png");
+	sprBlockA = LoadSprite("td1-1_blockA.png");
+	sprBlockB = LoadSprite("td1-1_blockB.png");
+	sprBlockC = LoadSprite("td1-1_blockC.png");
+	sprGoalTile = LoadSprite("td1-1_goal_tile.png");
+	sprCoin = LoadSprite("td1-1_coin.png");
+	sprBigCoin = LoadSprite("td1-1_big_coin.png");
+	sprHeal = LoadSprite("td1-1_heal.png");
+	sprHeart1 = LoadSprite("td1-1_ui_heart1.png");
+	sprHeart2 = LoadSprite("td1-1_ui_heart2.png");
+}
+
+// 画像を (x, y) を左上として、幅w・高さh にぴったり合わせて描く
+// 画像が読み込めていないときは、代わりに fallbackColor の四角形を描く
+void DrawSpriteFit(const Sprite& s, int x, int y, int w, int h, unsigned int fallbackColor, unsigned int color = WHITE) {
+	if (!s.IsValid()) {
+		Novice::DrawBox(x, y, w, h, 0.0f, fallbackColor, kFillModeSolid);
+		return;
+	}
+	Novice::DrawSprite(x, y, s.handle, static_cast<float>(w) / s.w, static_cast<float>(h) / s.h, 0.0f, color);
+}
+
+// 円形の物(コイン・弾など)を、中心(cx, cy)・半径r で描く
+void DrawSpriteCircle(const Sprite& s, float cx, float cy, float r, unsigned int fallbackColor, unsigned int color = WHITE) {
+	if (!s.IsValid()) {
+		Novice::DrawEllipse(static_cast<int>(cx), static_cast<int>(cy), static_cast<int>(r), static_cast<int>(r), 0.0f, fallbackColor, kFillModeSolid);
+		return;
+	}
+	int d = static_cast<int>(r * 2.0f);
+	DrawSpriteFit(s, static_cast<int>(cx - r), static_cast<int>(cy - r), d, d, fallbackColor, color);
+}
+
+// 画像を縦に count 枚ならべて、(x, y) から 幅w・高さh の範囲をうめる
+// (高さがぴったり割り切れなくても、すき間なく収まるよう少しだけ伸縮する)
+void DrawSpriteColumn(const Sprite& s, int x, int y, int w, int h, int count, unsigned int fallbackColor) {
+	if (count < 1) count = 1;
+	for (int i = 0; i < count; i++) {
+		int top = y + h * i / count;
+		int bottom = y + h * (i + 1) / count;
+		DrawSpriteFit(s, x, top, w, bottom - top, fallbackColor);
+	}
+}
+
+// 背景を描く(画面の高さに合わせて拡大し、横にくり返し並べてスクロールさせる)
+void DrawBackground() {
+	if (!sprBg.IsValid()) return; // 画像がなければ黒背景のまま
+
+	float scale = static_cast<float>(kScreenH) / sprBg.h;
+	int tileW = static_cast<int>(sprBg.w * scale);
+	if (tileW <= 0) return;
+
+	int offset = static_cast<int>(bgOffset) % tileW;
+	for (int x = -offset; x < kScreenW; x += tileW) {
+		Novice::DrawSprite(x, 0, sprBg.handle, scale, scale, 0.0f, WHITE);
+	}
+}
+
 // ============================================================
 // ユーティリティ
 // ============================================================
@@ -452,6 +619,22 @@ bool RectRectHit(float ax, float ay, float aw, float ah, float bx, float by, flo
 	return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
+// 障害物の i 番目のタイルの境目のY座標(i = 0 が上端、i = tileCount が下端)
+// 描画と当たり判定の両方で同じ式を使うので、見た目と判定がずれない
+float TileEdgeY(const Obstacle& o, int i) {
+	return o.y + o.h * i / o.tileCount;
+}
+
+// タイルを1つ壊す。全部壊れたら障害物ごと消す
+void DestroyTile(Obstacle& o, int i) {
+	if (!o.tileAlive[i]) return;
+	o.tileAlive[i] = false;
+	o.aliveTiles--;
+	if (o.aliveTiles <= 0) {
+		o.isActive = false;
+	}
+}
+
 // キーが「押された瞬間」か
 bool Triggered(const char* keys, const char* preKeys, int key) { return preKeys[key] == 0 && keys[key] != 0; }
 
@@ -471,6 +654,18 @@ void DrawHpBar(int x, int y, int w, int h, int hp, int maxHp, unsigned int color
 	Novice::DrawBox(x, y, w, h, 0.0f, kColorDarkGray, kFillModeSolid);
 	Novice::DrawBox(x, y, w * hp / maxHp, h, 0.0f, color, kFillModeSolid);
 	Novice::DrawBox(x, y, w, h, 0.0f, WHITE, kFillModeWireFrame);
+}
+
+// デバッグ表示:当たり判定(四角)を半透明で描く
+void DebugBox(float x, float y, float w, float h, unsigned int color) {
+	if (!debug) return;
+	Novice::DrawBox(static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h), 0.0f, color, kFillModeSolid);
+}
+
+// デバッグ表示:当たり判定(円)を半透明で描く
+void DebugCircle(float cx, float cy, float r, unsigned int color) {
+	if (!debug) return;
+	Novice::DrawEllipse(static_cast<int>(cx), static_cast<int>(cy), static_cast<int>(r), static_cast<int>(r), 0.0f, color, kFillModeSolid);
 }
 
 // プレイヤーにダメージ(無敵中は無効)
@@ -537,6 +732,16 @@ void SpawnObstacle(const SpawnData& d) {
 		obstacles[i].h = d.h;
 		obstacles[i].type = d.type;
 		obstacles[i].isActive = true;
+
+		// 縦に並べるタイルの数(高さ ÷ 幅 を四捨五入)。最初は全部残っている
+		int n = static_cast<int>(d.h / d.w + 0.5f);
+		if (n < 1) n = 1;
+		if (n > kMaxTilesPerObstacle) n = kMaxTilesPerObstacle;
+		obstacles[i].tileCount = n;
+		obstacles[i].aliveTiles = n;
+		for (int t = 0; t < kMaxTilesPerObstacle; t++) {
+			obstacles[i].tileAlive[t] = (t < n);
+		}
 		return;
 	}
 }
@@ -719,6 +924,7 @@ void FireBossFan(int count, float spread, float speed, float radius) {
 // ============================================================
 void UpdateTitle(const char* keys, const char* preKeys) {
 	titleFrame++;
+	bgOffset += kBgScrollSpeed;
 
 	// ENTERでステージ選択へ
 	if (Triggered(keys, preKeys, DIK_RETURN)) {
@@ -730,6 +936,8 @@ void UpdateTitle(const char* keys, const char* preKeys) {
 // 更新処理:ステージ選択
 // ============================================================
 void UpdateStageSelect(const char* keys, const char* preKeys) {
+	bgOffset += kBgScrollSpeed;
+
 	// 左右キー(またはA/D)でカーソル移動
 	if (Triggered(keys, preKeys, DIK_LEFT) || Triggered(keys, preKeys, DIK_A)) {
 		selectedStage = (selectedStage + kStageCount - 1) % kStageCount;
@@ -766,6 +974,9 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 		}
 		return;
 	}
+
+	// ---------- 背景のスクロール ----------
+	bgOffset += kBgScrollSpeed;
 
 	// ---------- プレイヤー:重力・浮力 ----------
 	player.vy += kGravity;
@@ -927,7 +1138,7 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 		}
 	}
 
-	// ---------- 当たり判定:プレイヤーの弾 × 障害物 ----------
+	// ---------- 当たり判定:プレイヤーの弾 × 障害物(タイル1つずつ) ----------
 	for (int i = 0; i < kMaxBullets; i++) {
 		Bullet& b = playerBullets[i];
 		if (!b.isActive) continue;
@@ -935,19 +1146,47 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 		for (int j = 0; j < kMaxObstacles; j++) {
 			Obstacle& o = obstacles[j];
 			if (!o.isActive) continue;
-			if (!CircleRectHit(b.x, b.y, b.radius, o.x, o.y, o.w, o.h)) continue;
 
-			if (b.isCharged) {
-				// チャージ弾:どちらの障害物も破壊し、弾は貫通する
-				o.isActive = false;
-				player.score += 10;
-			}
-			else {
-				// 通常弾:type 0 は破壊、type 1 は弾かれて消える
-				if (o.type == kObstacleNormal) {
-					o.isActive = false;
-					player.score += 10;
+			bool blocked = false;    // この障害物で弾が止められたか
+			int nearestTile = -1;    // 通常弾が壊すタイル(当たったうち弾に一番近いもの)
+			float nearestDist = 0.0f;
+
+			for (int t = 0; t < o.tileCount; t++) {
+				if (!o.tileAlive[t]) continue;
+
+				float top = TileEdgeY(o, t);
+				float height = TileEdgeY(o, t + 1) - top;
+				if (!CircleRectHit(b.x, b.y, b.radius, o.x, top, o.w, height)) continue;
+
+				// 壊せないブロック:どんな弾も防がれて消える
+				if (o.type == kObstacleSolid) {
+					blocked = true;
+					break;
 				}
+
+				if (b.isCharged) {
+					// チャージ弾:触れたタイルをすべて壊し、弾は貫通する
+					DestroyTile(o, t);
+					player.score += kTileScore;
+				}
+				else {
+					// 通常弾:ここで止まる。壊せるのは通常ブロックのタイル1つだけ
+					blocked = true;
+					if (o.type == kObstacleNormal) {
+						float dist = std::fabs(top + height / 2.0f - b.y);
+						if (nearestTile < 0 || dist < nearestDist) {
+							nearestTile = t;
+							nearestDist = dist;
+						}
+					}
+				}
+			}
+
+			if (nearestTile >= 0) {
+				DestroyTile(o, nearestTile);
+				player.score += kTileScore;
+			}
+			if (blocked) {
 				b.isActive = false;
 				break;
 			}
@@ -1001,15 +1240,29 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 		DamagePlayer(1);
 	}
 
-	// ---------- 当たり判定:プレイヤー × 障害物 ----------
-	for (int i = 0; i < kMaxObstacles; i++) {
-		Obstacle& o = obstacles[i];
-		if (!o.isActive) continue;
-		if (RectRectHit(player.x, player.y, player.size, player.size, o.x, o.y, o.w, o.h)) {
-			if (player.invincible == 0) {
-				DamagePlayer(1);
-				o.isActive = false; // ぶつかった障害物は壊れる
+	// ---------- 当たり判定:プレイヤー × 障害物(タイル1つずつ) ----------
+	if (player.invincible == 0) {
+		bool isHit = false;
+		for (int i = 0; i < kMaxObstacles; i++) {
+			Obstacle& o = obstacles[i];
+			if (!o.isActive) continue;
+
+			for (int t = 0; t < o.tileCount; t++) {
+				if (!o.tileAlive[t]) continue;
+
+				float top = TileEdgeY(o, t);
+				float height = TileEdgeY(o, t + 1) - top;
+				if (!RectRectHit(player.x, player.y, player.size, player.size, o.x, top, o.w, height)) continue;
+
+				isHit = true;
+				// ぶつかったタイルは壊れる(壊せないブロックだけは残る)
+				if (o.type != kObstacleSolid) {
+					DestroyTile(o, t);
+				}
 			}
+		}
+		if (isHit) {
+			DamagePlayer(1); // 何枚のタイルにぶつかっても、ダメージは1回
 		}
 	}
 
@@ -1089,12 +1342,12 @@ void UpdatePlay(const char* keys, const char* preKeys) {
 void DrawTitle() {
 	// 背景の飾り(ふわふわ浮かぶ自機とコインと敵)
 	float bob = std::sin(titleFrame * 0.05f) * 20.0f;
-	Novice::DrawBox(300, static_cast<int>(430.0f + bob), 40, 40, 0.0f, GREEN, kFillModeSolid);
+	DrawSpriteFit(sprPlayer, 300, static_cast<int>(430.0f + bob), 40, 40, GREEN);
 	for (int i = 0; i < 3; i++) {
-		Novice::DrawEllipse(420 + i * 40, static_cast<int>(450.0f + bob), static_cast<int>(12.0f), static_cast<int>(12.0f), 0.0f, kColorYellow, kFillModeSolid);
+		DrawSpriteCircle(sprCoin, static_cast<float>(420 + i * 40), 450.0f + bob, 12.0f, kColorYellow);
 	}
-	Novice::DrawEllipse(780, static_cast<int>(450.0f - bob), static_cast<int>(8.0f), static_cast<int>(8.0f), 0.0f, kColorOrange, kFillModeSolid);
-	Novice::DrawBox(900, static_cast<int>(430.0f - bob), 40, 40, 0.0f, RED, kFillModeSolid);
+	DrawSpriteCircle(sprEnemyShot, 780.0f, 450.0f - bob, 8.0f, kColorOrange);
+	DrawSpriteFit(sprEnemyA, 900, static_cast<int>(430.0f - bob), 40, 40, RED);
 
 	// タイトル
 	Novice::DrawBox(440, 180, 400, 100, 0.0f, kColorBlue, kFillModeSolid);
@@ -1109,7 +1362,7 @@ void DrawTitle() {
 	// 操作説明
 	GetFont().Printf(470, 560, "SPACE : Float up / Release = Shot / Hold = Charge Shot");
 	GetFont().Printf(470, 585, "Get Coins, Reach the GOAL!  Falling off screen = Dead");
-	GetFont().Printf(470, 610, "ESC : Quit");
+	GetFont().Printf(470, 610, "ESC : Quit    F1 : Debug (hitbox)");
 }
 
 // ============================================================
@@ -1157,31 +1410,96 @@ void DrawStageSelect() {
 }
 
 // ============================================================
+// 描画処理:デバッグ用の当たり判定(debug が true のときだけ表示)
+// ============================================================
+void DrawHitboxes() {
+	if (!debug) return;
+
+	// 障害物(種類ごとに色を変える)
+	for (int i = 0; i < kMaxObstacles; i++) {
+		const Obstacle& o = obstacles[i];
+		if (!o.isActive) continue;
+		unsigned int color = kDebugBlockNormal;
+		if (o.type == kObstacleChargeOnly) color = kDebugBlockCharge;
+		if (o.type == kObstacleSolid) color = kDebugBlockSolid;
+		// タイルごとに表示(境目が見えるよう、高さを1px小さく描く)
+		for (int t = 0; t < o.tileCount; t++) {
+			if (!o.tileAlive[t]) continue;
+			float top = TileEdgeY(o, t);
+			float height = TileEdgeY(o, t + 1) - top;
+			DebugBox(o.x, top, o.w, height - 1.0f, color);
+		}
+	}
+
+	// ゴール
+	if (goal.isActive) {
+		DebugBox(goal.x, 0.0f, static_cast<float>(kGoalWidth), static_cast<float>(kScreenH), kDebugGoal);
+	}
+
+	// コイン・大コイン・回復アイテム
+	for (int i = 0; i < kMaxCoins; i++) {
+		if (coins[i].isActive) DebugCircle(coins[i].x, coins[i].y, coins[i].radius, kDebugItem);
+	}
+	for (int i = 0; i < kMaxBigCoins; i++) {
+		if (bigCoins[i].isActive) DebugCircle(bigCoins[i].x, bigCoins[i].y, bigCoins[i].radius, kDebugItem);
+	}
+	for (int i = 0; i < kMaxHeals; i++) {
+		if (heals[i].isActive) DebugCircle(heals[i].x, heals[i].y, heals[i].radius, kDebugItem);
+	}
+
+	// 敵・ボス
+	for (int i = 0; i < kMaxEnemies; i++) {
+		if (enemies[i].isActive) DebugBox(enemies[i].x, enemies[i].y, enemies[i].size, enemies[i].size, kDebugEnemy);
+	}
+	if (boss.isActive) {
+		DebugBox(boss.x, boss.y, kBossW, kBossH, kDebugBoss);
+	}
+
+	// 弾
+	for (int i = 0; i < kMaxBullets; i++) {
+		if (enemyBullets[i].isActive) DebugCircle(enemyBullets[i].x, enemyBullets[i].y, enemyBullets[i].radius, kDebugEnemyBullet);
+		if (playerBullets[i].isActive) DebugCircle(playerBullets[i].x, playerBullets[i].y, playerBullets[i].radius, kDebugPlayerBullet);
+	}
+
+	// 自機
+	if (!isGameOver) {
+		DebugBox(player.x, player.y, player.size, player.size, kDebugPlayer);
+	}
+}
+
+// ============================================================
 // 描画処理:プレイ中(ゲームオーバー・クリア表示も含む)
 // ============================================================
 void DrawPlay() {
 
-	// ---------- 障害物 ----------
+	// ---------- 障害物(残っているタイルを1つずつ描く) ----------
 	for (int i = 0; i < kMaxObstacles; i++) {
 		const Obstacle& o = obstacles[i];
 		if (!o.isActive) continue;
-		unsigned int color = (o.type == kObstacleNormal) ? kColorBrown : kColorPurple;
-		Novice::DrawBox(static_cast<int>(o.x), static_cast<int>(o.y), static_cast<int>(o.w), static_cast<int>(o.h), 0.0f, color, kFillModeSolid);
-		// チャージ専用は枠線で目立たせる
+
+		const Sprite* spr = &sprBlockB; // 通常弾で壊せる
+		unsigned int fallback = kColorBrown;
 		if (o.type == kObstacleChargeOnly) {
-			Novice::DrawBox(static_cast<int>(o.x), static_cast<int>(o.y), static_cast<int>(o.w), static_cast<int>(o.h), 0.0f, WHITE, kFillModeWireFrame);
+			spr = &sprBlockC; // チャージ弾でのみ壊せる
+			fallback = kColorPurple;
+		}
+		else if (o.type == kObstacleSolid) {
+			spr = &sprBlockA; // 壊せない
+			fallback = kColorGray;
+		}
+
+		for (int t = 0; t < o.tileCount; t++) {
+			if (!o.tileAlive[t]) continue; // 壊れたタイルは描かない
+			// 隣のタイルと同じ式で境目を求めるので、すき間は空かない
+			int top = static_cast<int>(TileEdgeY(o, t));
+			int bottom = static_cast<int>(TileEdgeY(o, t + 1));
+			DrawSpriteFit(*spr, static_cast<int>(o.x), top, static_cast<int>(o.w), bottom - top, fallback);
 		}
 	}
 
-	// ---------- ゴール(チェッカー模様のゲート) ----------
+	// ---------- ゴール(画像を縦にならべたゲート) ----------
 	if (goal.isActive) {
-		const int cell = 30;
-		for (int row = 0; row * cell < kScreenH; row++) {
-			for (int col = 0; col < kGoalWidth / cell; col++) {
-				unsigned int color = ((row + col) % 2 == 0) ? WHITE : BLACK;
-				Novice::DrawBox(static_cast<int>(goal.x) + col * cell, row * cell, cell, cell, 0.0f, color, kFillModeSolid);
-			}
-		}
+		DrawSpriteColumn(sprGoalTile, static_cast<int>(goal.x), 0, kGoalWidth, kScreenH, kScreenH / kGoalTileH, kColorGray);
 		GetFont().Printf(static_cast<int>(goal.x) + 10, 340, "GOAL");
 	}
 
@@ -1189,83 +1507,70 @@ void DrawPlay() {
 	for (int i = 0; i < kMaxCoins; i++) {
 		const Coin& c = coins[i];
 		if (!c.isActive) continue;
-		Novice::DrawEllipse(static_cast<int>(c.x), static_cast<int>(c.y), static_cast<int>(c.radius), static_cast<int>(c.radius), 0.0f, kColorYellow, kFillModeSolid);
+		DrawSpriteCircle(sprCoin, c.x, c.y, c.radius, kColorYellow);
 	}
 
 	// ---------- 大コイン ----------
 	for (int i = 0; i < kMaxBigCoins; i++) {
 		const Coin& c = bigCoins[i];
 		if (!c.isActive) continue;
-		int cx = static_cast<int>(c.x);
-		int cy = static_cast<int>(c.y);
-		Novice::DrawEllipse(cx, cy, static_cast<int>(c.radius), static_cast<int>(c.radius), 0.0f, kColorOrange, kFillModeSolid);
-		Novice::DrawEllipse(cx, cy, static_cast<int>(c.radius - 6.0f), static_cast<int>(c.radius - 6.0f), 0.0f, kColorGold, kFillModeSolid);
-		Novice::DrawEllipse(cx - 6, cy - 6, static_cast<int>(4.0f), static_cast<int>(4.0f), 0.0f, WHITE, kFillModeSolid); // つや
+		DrawSpriteCircle(sprBigCoin, c.x, c.y, c.radius, kColorGold);
 	}
 
-	// ---------- 回復アイテム(緑の丸に白い十字) ----------
+	// ---------- 回復アイテム ----------
 	for (int i = 0; i < kMaxHeals; i++) {
 		const Coin& c = heals[i];
 		if (!c.isActive) continue;
-		int cx = static_cast<int>(c.x);
-		int cy = static_cast<int>(c.y);
-		Novice::DrawEllipse(cx, cy, static_cast<int>(c.radius), static_cast<int>(c.radius), 0.0f, kColorHeal, kFillModeSolid);
-		Novice::DrawBox(cx - 8, cy - 2, 16, 4, 0.0f, WHITE, kFillModeSolid);
-		Novice::DrawBox(cx - 2, cy - 8, 4, 16, 0.0f, WHITE, kFillModeSolid);
+		DrawSpriteCircle(sprHeal, c.x, c.y, c.radius, kColorHeal);
 	}
 
 	// ---------- 敵 ----------
 	for (int i = 0; i < kMaxEnemies; i++) {
 		const Enemy& e = enemies[i];
 		if (!e.isActive) continue;
-		unsigned int color = (e.type == kEnemyShooter) ? RED : kColorPink;
-		Novice::DrawBox(static_cast<int>(e.x), static_cast<int>(e.y), static_cast<int>(e.size), static_cast<int>(e.size), 0.0f, color, kFillModeSolid);
+		const Sprite& spr = (e.type == kEnemyShooter) ? sprEnemyA : sprEnemyB;
+		unsigned int fallback = (e.type == kEnemyShooter) ? RED : kColorPink;
+		DrawSpriteFit(spr, static_cast<int>(e.x), static_cast<int>(e.y), static_cast<int>(e.size), static_cast<int>(e.size), fallback);
 		// 雑魚敵のHPバー
 		DrawHpBar(static_cast<int>(e.x), static_cast<int>(e.y) - 10, static_cast<int>(e.size), 5, e.hp, e.maxHp, kColorHpBar);
 	}
 
-	// ---------- ボス ----------
+	// ---------- ボス(ダメージを受けた直後は専用の画像) ----------
 	if (boss.isActive) {
-		int bx = static_cast<int>(boss.x);
-		int by = static_cast<int>(boss.y);
-		int bw = static_cast<int>(kBossW);
-		int bh = static_cast<int>(kBossH);
-		unsigned int color = (boss.hitFlash > 0) ? WHITE : kColorDarkRed; // 被弾すると白く光る
-		Novice::DrawBox(bx, by, bw, bh, 0.0f, color, kFillModeSolid);
-		Novice::DrawBox(bx, by, bw, bh, 0.0f, WHITE, kFillModeWireFrame);
-		// 目(自機のほうを向いている)
-		Novice::DrawBox(bx + 20, by + 30, 24, 24, 0.0f, kColorYellow, kFillModeSolid);
-		Novice::DrawBox(bx + 20, by + 70, 24, 24, 0.0f, kColorYellow, kFillModeSolid);
+		const Sprite& spr = (boss.hitFlash > 0) ? sprBoss2 : sprBoss1;
+		unsigned int fallback = (boss.hitFlash > 0) ? WHITE : kColorDarkRed;
+		DrawSpriteFit(spr, static_cast<int>(boss.x), static_cast<int>(boss.y), static_cast<int>(kBossW), static_cast<int>(kBossH), fallback);
 	}
 
 	// ---------- 敵の弾 ----------
 	for (int i = 0; i < kMaxBullets; i++) {
 		const Bullet& b = enemyBullets[i];
 		if (!b.isActive) continue;
-		Novice::DrawEllipse(static_cast<int>(b.x), static_cast<int>(b.y), static_cast<int>(b.radius), static_cast<int>(b.radius), 0.0f, kColorOrange, kFillModeSolid);
+		DrawSpriteCircle(sprEnemyShot, b.x, b.y, b.radius, kColorOrange);
 	}
 
 	// ---------- プレイヤーの弾 ----------
 	for (int i = 0; i < kMaxBullets; i++) {
 		const Bullet& b = playerBullets[i];
 		if (!b.isActive) continue;
-		unsigned int color = b.isCharged ? kColorCyan : WHITE;
-		Novice::DrawEllipse(static_cast<int>(b.x), static_cast<int>(b.y), static_cast<int>(b.radius), static_cast<int>(b.radius), 0.0f, color, kFillModeSolid);
+		const Sprite& spr = b.isCharged ? sprChargeShot : sprNormalShot;
+		DrawSpriteCircle(spr, b.x, b.y, b.radius, b.isCharged ? kColorCyan : WHITE);
 	}
 
 	// ---------- プレイヤー(無敵中は点滅) ----------
 	if (!isGameOver && player.y <= kScreenH) {
 		bool visible = (player.invincible == 0) || ((player.invincible / 5) % 2 == 0);
 		if (visible) {
-			Novice::DrawBox(static_cast<int>(player.x), static_cast<int>(player.y), static_cast<int>(player.size), static_cast<int>(player.size), 0.0f, GREEN, kFillModeSolid);
+			DrawSpriteFit(sprPlayer, static_cast<int>(player.x), static_cast<int>(player.y), static_cast<int>(player.size), static_cast<int>(player.size), GREEN);
 		}
 
-		// チャージ中のエフェクトとゲージ
+		// チャージ中のエフェクト(チャージ弾の画像が大きくなる)とゲージ
 		if (player.charge > 5) {
 			float rate = static_cast<float>(player.charge) / kChargeNeed;
 			bool full = player.charge >= kChargeNeed;
 			float r = 4.0f + 16.0f * rate;
-			Novice::DrawEllipse(static_cast<int>(player.x + player.size + 8.0f), static_cast<int>(player.y + player.size / 2.0f), static_cast<int>(r), static_cast<int>(r), 0.0f, full ? kColorCyan : kColorGray, kFillModeSolid);
+			// 溜まりきるまでは半透明、溜まったら不透明
+			DrawSpriteCircle(sprChargeShot, player.x + player.size + 8.0f, player.y + player.size / 2.0f, r, full ? kColorCyan : kColorGray, full ? WHITE : 0xFFFFFF99);
 
 			int gaugeW = static_cast<int>(player.size * rate);
 			Novice::DrawBox(static_cast<int>(player.x), static_cast<int>(player.y) - 10, static_cast<int>(player.size), 5, 0.0f, kColorGray, kFillModeWireFrame);
@@ -1273,18 +1578,28 @@ void DrawPlay() {
 		}
 	}
 
+	// ---------- デバッグ:当たり判定(半透明) ----------
+	DrawHitboxes();
+
 	// ---------- UI ----------
-	// HPバー
+	// HP(ハートの画像。残っているものと、なくなったもの)
 	for (int i = 0; i < kPlayerMaxHp; i++) {
-		Novice::DrawBox(20 + i * 30, 20, 24, 24, 0.0f, i < player.hp ? RED : kColorGray, i < player.hp ? kFillModeSolid : kFillModeWireFrame);
+		if (i < player.hp) {
+			DrawSpriteFit(sprHeart1, 20 + i * 30, 20, 24, 24, RED);
+		}
+		else {
+			DrawSpriteFit(sprHeart2, 20 + i * 30, 20, 24, 24, kColorGray);
+		}
 	}
 	GetFont().Printf(20, 55, "SCORE: %d", player.score);
 	GetFont().Printf(20, 75, "COIN : %d", player.coins);
 	GetFont().Printf(150, 75, "BIG COIN: %d / %d", player.bigCoins, CountSpawnKind(currentStage, kSpawnBigCoin));
 	GetFont().Printf(20, 100, "SPACE: Float / Release = Shot / Hold = Charge Shot");
-	GetFont().Printf(20, 120, "Brown = Normal Shot OK / Purple = Charge Shot Only");
-	GetFont().Printf(20, 140, "Red = Shooter / Pink = Static (no shot)");
-	GetFont().Printf(20, 160, "Gold(big) = Bonus Coin / Green + = Heal");
+	GetFont().Printf(20, 120, "Block: Normal = Shot OK / Hard = Charge Only / Solid = Unbreakable");
+	GetFont().Printf(20, 140, "Big Coin = Bonus / Heal Item = +1 HP");
+	if (debug) {
+		GetFont().Printf(20, 160, "DEBUG ON (F1): hitbox");
+	}
 	GetFont().Printf(1000, 20, "STAGE %d : %s", currentStage + 1, kStages[currentStage].name);
 
 	// ボスのHPバー(画面上部)
@@ -1326,6 +1641,9 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 
 	GetFont().Create(L"PixelMplus12-Bold.ttf", L"PixelMplus12", 16);
 
+	// 画像の読み込み
+	LoadSprites();
+
 	// キー入力結果を受け取る箱
 	char keys[256] = { 0 };
 	char preKeys[256] = { 0 };
@@ -1351,6 +1669,11 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 		/// ↓更新処理ここから
 		///
 
+		// F1キーでデバッグ表示(当たり判定)の ON / OFF
+		if (Triggered(keys, preKeys, DIK_F1)) {
+			debug = !debug;
+		}
+
 		switch (scene) {
 		case kSceneTitle:
 			UpdateTitle(keys, preKeys);
@@ -1370,6 +1693,9 @@ int WINAPI WinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPSTR, _In_ int) {
 		///
 		/// ↓描画処理ここから
 		///
+
+		// 背景(どの画面でも最背面に描く)
+		DrawBackground();
 
 		switch (scene) {
 		case kSceneTitle:
