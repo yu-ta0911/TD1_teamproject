@@ -430,8 +430,130 @@ const SpawnData kStage3Data[] = {
 	MakeGoal(1700),     // ボスが生きている間は、ここまで来ても出現を待ちます
 };
 
+// ---------- STAGE 4:要塞(壊せないブロックが多い) ----------
+const SpawnData kStage4Data[] = {
+	MakeCoin(60, 360.0f, 3),
+	MakeEnemy(100, 200.0f, kEnemyShooter, 3),
+
+	// 壊せないブロックの柱(すき間を通り抜ける)
+	MakeObstacle(160, 0.0f, 40.0f, 300.0f, kObstacleSolid),
+	MakeObstacle(160, 400.0f, 40.0f, 320.0f, kObstacleSolid),
+	MakeBigCoin(160, 350.0f), // 大コイン1枚目(壊せないブロックのすき間の中)
+	MakeCoin(230, 360.0f, 3),
+
+	MakeEnemy(300, 500.0f, kEnemyShooter, 3),
+	MakeObstacle(340, 0.0f, 40.0f, 240.0f, kObstacleChargeOnly),
+	MakeObstacle(340, 340.0f, 40.0f, 380.0f, kObstacleNormal),
+	MakeCoin(400, 290.0f, 3),
+
+	MakeEnemy(460, 150.0f, kEnemyStatic, 5),
+	MakeEnemy(460, 600.0f, kEnemyStatic, 5),
+	MakeObstacle(520, 200.0f, 40.0f, 160.0f, kObstacleSolid),
+	MakeObstacle(560, 440.0f, 40.0f, 160.0f, kObstacleSolid),
+	MakeHeal(600, 320.0f), // 回復アイテム1つ目
+	MakeCoin(640, 400.0f, 3),
+
+	MakeEnemy(700, 250.0f, kEnemyShooter, 3),
+	MakeEnemy(700, 450.0f, kEnemyShooter, 3),
+	MakeObstacle(760, 0.0f, 40.0f, 360.0f, kObstacleNormal),
+	MakeObstacle(760, 440.0f, 40.0f, 280.0f, kObstacleChargeOnly),
+	MakeBigCoin(820, 650.0f), // 大コイン2枚目(画面の下のほう)
+	MakeCoin(880, 400.0f, 3),
+
+	MakeEnemy(940, 100.0f, kEnemyShooter, 3),
+	MakeEnemy(940, 360.0f, kEnemyShooter, 3),
+	MakeEnemy(940, 620.0f, kEnemyShooter, 3),
+	MakeObstacle(1000, 0.0f, 40.0f, 200.0f, kObstacleSolid),
+	MakeObstacle(1000, 300.0f, 40.0f, 420.0f, kObstacleChargeOnly),
+	MakeHeal(1060, 250.0f), // 回復アイテム2つ目
+	MakeCoin(1100, 250.0f, 3),
+
+	MakeObstacle(1160, 0.0f, 40.0f, 400.0f, kObstacleChargeOnly),
+	MakeObstacle(1160, 480.0f, 40.0f, 240.0f, kObstacleSolid),
+	MakeBigCoin(1160, 440.0f), // 大コイン3枚目(すき間の中)
+	MakeEnemy(1220, 300.0f, kEnemyStatic, 5),
+	MakeCoin(1280, 440.0f, 3),
+
+	MakeEnemy(1360, 200.0f, kEnemyShooter, 3),
+	MakeEnemy(1360, 520.0f, kEnemyShooter, 3),
+	MakeObstacle(1420, 0.0f, 40.0f, 300.0f, kObstacleNormal),
+	MakeObstacle(1420, 380.0f, 40.0f, 340.0f, kObstacleNormal),
+	MakeObstacle(1500, 100.0f, 40.0f, 160.0f, kObstacleSolid),
+	MakeObstacle(1540, 460.0f, 40.0f, 160.0f, kObstacleSolid),
+	MakeHeal(1580, 360.0f), // 回復アイテム3つ目
+	MakeCoin(1620, 300.0f, 3),
+
+	MakeGoal(1800),
+};
+
+// ---------- STAGE 5:最終ステージ(総まとめ + 強いボス) ----------
+const SpawnData kStage5Data[] = {
+	MakeCoin(60, 360.0f, 3),
+	MakeEnemy(80, 150.0f, kEnemyShooter, 3),
+	MakeEnemy(80, 570.0f, kEnemyShooter, 3),
+
+	MakeObstacle(150, 0.0f, 40.0f, 260.0f, kObstacleSolid),
+	MakeObstacle(150, 360.0f, 40.0f, 360.0f, kObstacleChargeOnly),
+	MakeCoin(210, 310.0f, 3),
+
+	MakeObstacle(260, 0.0f, 40.0f, 400.0f, kObstacleNormal),
+	MakeObstacle(260, 480.0f, 40.0f, 240.0f, kObstacleSolid),
+	MakeBigCoin(260, 440.0f), // 大コイン1枚目(すき間の中)
+	MakeEnemy(320, 360.0f, kEnemyStatic, 5),
+	MakeObstacle(380, 0.0f, 40.0f, 180.0f, kObstacleChargeOnly),
+	MakeObstacle(380, 260.0f, 40.0f, 460.0f, kObstacleChargeOnly),
+	MakeCoin(440, 220.0f, 3),
+
+	MakeEnemy(500, 200.0f, kEnemyShooter, 3),
+	MakeEnemy(500, 500.0f, kEnemyShooter, 3),
+	MakeObstacle(560, 160.0f, 40.0f, 120.0f, kObstacleSolid),
+	MakeObstacle(600, 420.0f, 40.0f, 120.0f, kObstacleSolid),
+	MakeHeal(640, 340.0f), // 回復アイテム1つ目
+	MakeCoin(680, 540.0f, 3),
+
+	MakeObstacle(740, 0.0f, 40.0f, 340.0f, kObstacleNormal),
+	MakeObstacle(740, 420.0f, 40.0f, 300.0f, kObstacleChargeOnly),
+	MakeEnemy(780, 100.0f, kEnemyShooter, 3),
+	MakeEnemy(780, 360.0f, kEnemyShooter, 3),
+	MakeEnemy(780, 620.0f, kEnemyShooter, 3),
+	MakeBigCoin(840, 90.0f), // 大コイン2枚目(画面の上のほう)
+	MakeObstacle(860, 0.0f, 40.0f, 200.0f, kObstacleChargeOnly),
+	MakeObstacle(860, 300.0f, 40.0f, 420.0f, kObstacleSolid),
+	MakeCoin(920, 250.0f, 3),
+
+	MakeEnemy(980, 300.0f, kEnemyStatic, 5),
+	MakeEnemy(980, 500.0f, kEnemyStatic, 5),
+	MakeObstacle(1040, 0.0f, 40.0f, 440.0f, kObstacleChargeOnly),
+	MakeObstacle(1040, 520.0f, 40.0f, 200.0f, kObstacleNormal),
+	MakeHeal(1100, 480.0f), // 回復アイテム2つ目
+	MakeCoin(1140, 480.0f, 3),
+
+	MakeObstacle(1200, 0.0f, 40.0f, 240.0f, kObstacleSolid),
+	MakeObstacle(1200, 320.0f, 40.0f, 400.0f, kObstacleNormal),
+	MakeEnemy(1260, 180.0f, kEnemyShooter, 3),
+	MakeEnemy(1260, 540.0f, kEnemyShooter, 3),
+	MakeObstacle(1320, 0.0f, 40.0f, 300.0f, kObstacleNormal),
+	MakeObstacle(1320, 380.0f, 40.0f, 340.0f, kObstacleSolid),
+	MakeBigCoin(1320, 340.0f), // 大コイン3枚目(せまいすき間の中)
+	MakeCoin(1400, 340.0f, 3),
+
+	MakeEnemy(1460, 120.0f, kEnemyShooter, 3),
+	MakeEnemy(1460, 360.0f, kEnemyShooter, 3),
+	MakeEnemy(1460, 600.0f, kEnemyShooter, 3),
+	MakeObstacle(1520, 0.0f, 40.0f, 320.0f, kObstacleChargeOnly),
+	MakeObstacle(1520, 400.0f, 40.0f, 320.0f, kObstacleChargeOnly),
+	MakeObstacle(1600, 200.0f, 40.0f, 140.0f, kObstacleSolid),
+	MakeCoin(1660, 500.0f, 3),
+	MakeObstacle(1720, 0.0f, 40.0f, 300.0f, kObstacleNormal),
+	MakeObstacle(1720, 400.0f, 40.0f, 320.0f, kObstacleNormal),
+	MakeHeal(1800, 360.0f), // ボス前の回復アイテム
+
+	MakeBoss(2000, 60), // ボス登場(HP60。ステージ3のボスより頑丈)
+	MakeGoal(2100),     // ボスを倒すまで、出現を待ちます
+};
+
 // ---------- ステージ一覧(ステージ選択画面に並ぶ順) ----------
-// ステージを増やすときは、上に kStage4Data[] を作って、ここに1行足すだけです。
+// ステージを増やすときは、上に kStage6Data[] を作って、ここに1行足すだけです。
 struct StageInfo {
 	const char* name;
 	const SpawnData* data;
@@ -442,6 +564,8 @@ const StageInfo kStages[] = {
 	{"Sky Walk", kStage1Data, static_cast<int>(sizeof(kStage1Data) / sizeof(kStage1Data[0]))},
 	{"Cannon Valley", kStage2Data, static_cast<int>(sizeof(kStage2Data) / sizeof(kStage2Data[0]))},
 	{"Wall Rush", kStage3Data, static_cast<int>(sizeof(kStage3Data) / sizeof(kStage3Data[0]))},
+	{"Fortress Run", kStage4Data, static_cast<int>(sizeof(kStage4Data) / sizeof(kStage4Data[0]))},
+	{"Final Skies", kStage5Data, static_cast<int>(sizeof(kStage5Data) / sizeof(kStage5Data[0]))},
 };
 const int kStageCount = static_cast<int>(sizeof(kStages) / sizeof(kStages[0]));
 
@@ -1371,18 +1495,19 @@ void DrawTitle() {
 void DrawStageSelect() {
 	GetFont().Printf(565, 110, "- STAGE SELECT -");
 
-	const int kBoxW = 300;
 	const int kBoxH = 220;
 	const int kBoxY = 240;
 	int spacing = kScreenW / kStageCount;
+	int boxW = spacing - 20; // ステージ数が多いほど、カードを細くする
+	if (boxW > 300) boxW = 300;
 
 	for (int i = 0; i < kStageCount; i++) {
 		int cx = spacing * i + spacing / 2;
-		int x = cx - kBoxW / 2;
+		int x = cx - boxW / 2;
 		bool isSelected = (i == selectedStage);
 
-		Novice::DrawBox(x, kBoxY, kBoxW, kBoxH, 0.0f, isSelected ? kColorBlue : kColorDarkGray, kFillModeSolid);
-		Novice::DrawBox(x, kBoxY, kBoxW, kBoxH, 0.0f, isSelected ? WHITE : kColorGray, kFillModeWireFrame);
+		Novice::DrawBox(x, kBoxY, boxW, kBoxH, 0.0f, isSelected ? kColorBlue : kColorDarkGray, kFillModeSolid);
+		Novice::DrawBox(x, kBoxY, boxW, kBoxH, 0.0f, isSelected ? WHITE : kColorGray, kFillModeWireFrame);
 
 		GetFont().Printf(x + 20, kBoxY + 25, "STAGE %d", i + 1);
 		GetFont().Printf(x + 20, kBoxY + 55, "%s", kStages[i].name);
