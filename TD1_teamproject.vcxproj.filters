@@ -106,5 +106,8 @@
     <ClInclude Include="FontRenderer.h">
       <Filter>KamataEngine\Adapter</Filter>
     </ClInclude>
+    <ClInclude Include="Stagemaps.h">
+      <Filter>KamataEngine\Adapter</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
